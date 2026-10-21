@@ -9,8 +9,8 @@ android {
         applicationId = "com.ktmrc390.obd"
         minSdk = 23
         targetSdk = 35
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = 2000
+        versionName = "RC390_V002_000"
     }
     buildTypes {
         release {
