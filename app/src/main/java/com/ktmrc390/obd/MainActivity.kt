@@ -15,6 +15,8 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.widget.ArrayAdapter
+import android.widget.LinearLayout
+import android.view.View
 import android.widget.Button
 import android.widget.EditText
 import android.widget.ScrollView
@@ -40,6 +42,12 @@ class MainActivity : Activity() {
     private lateinit var dtcButton: Button
     private lateinit var sendButton: Button
     private lateinit var commandInput: EditText
+    private lateinit var consolePanel: View
+    private lateinit var graphPanel: View
+    private lateinit var racingPanel: View
+    private lateinit var graphBarsContainer: LinearLayout
+    private lateinit var racingState: TextView
+    private lateinit var racingAlerts: TextView
     private val devices = mutableListOf<BluetoothDevice>()
     private var currentDevice: BluetoothDevice? = null
 
@@ -58,6 +66,17 @@ class MainActivity : Activity() {
         dtcButton = findViewById(R.id.dtcButton)
         sendButton = findViewById(R.id.sendButton)
         commandInput = findViewById(R.id.commandInput)
+        consolePanel = findViewById(R.id.consolePanel)
+        graphPanel = findViewById(R.id.graphPanel)
+        racingPanel = findViewById(R.id.racingPanel)
+        graphBarsContainer = findViewById(R.id.graphBarsContainer)
+        racingState = findViewById(R.id.racingState)
+        racingAlerts = findViewById(R.id.racingAlerts)
+
+        findViewById<Button>(R.id.navConsole).setOnClickListener { showPanel("console") }
+        findViewById<Button>(R.id.navGraphique).setOnClickListener { showPanel("graph") }
+        findViewById<Button>(R.id.navRacing).setOnClickListener { showPanel("racing") }
+        populateGraphBars()
         findViewById<Button>(R.id.refreshButton).setOnClickListener { loadBondedDevices() }
         connectButton.setOnClickListener { toggleConnection() }
         scanButton.setOnClickListener { scanEcu() }
@@ -65,9 +84,28 @@ class MainActivity : Activity() {
         sendButton.setOnClickListener { sendRawCommand() }
         findViewById<Button>(R.id.copyButton).setOnClickListener { copyReport() }
         findViewById<Button>(R.id.shareButton).setOnClickListener { shareReport() }
-        appendLog("KTM OBD V0.2")
+        appendLog("RC390_V002_000")
         appendLog("Connexion directe Bluetooth SPP avec OBDLink LX.")
         ensureBluetoothPermission()
+    }
+
+    private fun showPanel(panel: String) {
+        consolePanel.visibility = if (panel == "console") View.VISIBLE else View.GONE
+        graphPanel.visibility = if (panel == "graph") View.VISIBLE else View.GONE
+        racingPanel.visibility = if (panel == "racing") View.VISIBLE else View.GONE
+    }
+
+    private fun populateGraphBars() {
+        graphBarsContainer.removeAllViews()
+        SensorThresholds.base.forEach { sensor ->
+            val bar = SensorBarView(this).apply {
+                spec = sensor
+                sensorValue = null
+            }
+            val lp = LinearLayout.LayoutParams(140, LinearLayout.LayoutParams.MATCH_PARENT)
+            lp.setMargins(8, 0, 8, 0)
+            graphBarsContainer.addView(bar, lp)
+        }
     }
 
     private fun ensureBluetoothPermission() {
@@ -236,18 +274,18 @@ class MainActivity : Activity() {
     }
 
     private fun postLog(message: String) { mainHandler.post { appendLog(message) } }
-    private fun reportText(): String = "KTM OBD — rapport " + Date() + "\n\n" + logText.text
+    private fun reportText(): String = "RC390_V002_000 — rapport " + Date() + "\n\n" + logText.text
 
     private fun copyReport() {
         val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-        clipboard.setPrimaryClip(ClipData.newPlainText("KTM OBD report", reportText()))
+        clipboard.setPrimaryClip(ClipData.newPlainText("RC390_V002_000 report", reportText()))
         toast("Rapport copié")
     }
 
     private fun shareReport() {
         val intent = Intent(Intent.ACTION_SEND).apply {
             type = "text/plain"
-            putExtra(Intent.EXTRA_SUBJECT, "KTM OBD — rapport")
+            putExtra(Intent.EXTRA_SUBJECT, "RC390_V002_000 — rapport")
             putExtra(Intent.EXTRA_TEXT, reportText())
         }
         startActivity(Intent.createChooser(intent, "Partager le rapport"))
