@@ -1,2 +1,4 @@
 <?xml version="1.0" encoding="utf-8"?>
-<resources><string name="app_name">KTM OBD</string></resources>
+<resources>
+    <string name="app_name">RC390_V002_000</string>
+</resources>
