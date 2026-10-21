@@ -1,40 +1,229 @@
 <?xml version="1.0" encoding="utf-8"?>
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
-    android:layout_width="match_parent" android:layout_height="match_parent"
-    android:orientation="vertical" android:padding="14dp">
-    <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
-        android:text="KTM OBD — RC 390" android:textSize="23sp" android:textStyle="bold" />
-    <TextView android:id="@+id/statusText" android:layout_width="match_parent" android:layout_height="wrap_content"
-        android:layout_marginTop="4dp" android:text="Déconnecté" android:textSize="15sp" />
-    <Spinner android:id="@+id/deviceSpinner" android:layout_width="match_parent" android:layout_height="wrap_content"
-        android:layout_marginTop="8dp" />
-    <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal">
-        <Button android:id="@+id/refreshButton" android:layout_width="0dp" android:layout_height="wrap_content"
-            android:layout_weight="1" android:text="Actualiser" />
-        <Button android:id="@+id/connectButton" android:layout_width="0dp" android:layout_height="wrap_content"
-            android:layout_weight="1" android:text="Connexion" />
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:padding="8dp">
+
+        <Button
+            android:id="@+id/navConsole"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="Console" />
+
+        <Button
+            android:id="@+id/navGraphique"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="Graphique" />
+
+        <Button
+            android:id="@+id/navRacing"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="Racing" />
     </LinearLayout>
-    <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal">
-        <Button android:id="@+id/scanButton" android:layout_width="0dp" android:layout_height="wrap_content"
-            android:layout_weight="1" android:enabled="false" android:text="Scanner ECU" />
-        <Button android:id="@+id/dtcButton" android:layout_width="0dp" android:layout_height="wrap_content"
-            android:layout_weight="1" android:enabled="false" android:text="Lire DTC" />
-    </LinearLayout>
-    <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal">
-        <EditText android:id="@+id/commandInput" android:layout_width="0dp" android:layout_height="wrap_content"
-            android:layout_weight="1" android:hint="Commande brute : 010C" android:inputType="textCapCharacters" android:singleLine="true" />
-        <Button android:id="@+id/sendButton" android:layout_width="wrap_content" android:layout_height="wrap_content"
-            android:enabled="false" android:text="Envoyer" />
-    </LinearLayout>
-    <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal">
-        <Button android:id="@+id/copyButton" android:layout_width="0dp" android:layout_height="wrap_content"
-            android:layout_weight="1" android:text="Copier rapport" />
-        <Button android:id="@+id/shareButton" android:layout_width="0dp" android:layout_height="wrap_content"
-            android:layout_weight="1" android:text="Partager" />
-    </LinearLayout>
-    <ScrollView android:id="@+id/logScroll" android:layout_width="match_parent" android:layout_height="0dp"
-        android:layout_weight="1" android:background="#101010" android:padding="8dp">
-        <TextView android:id="@+id/logText" android:layout_width="match_parent" android:layout_height="wrap_content"
-            android:fontFamily="monospace" android:textColor="#F0F0F0" android:textIsSelectable="true" android:textSize="12sp" />
-    </ScrollView>
+
+    <FrameLayout
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1">
+
+        <LinearLayout
+            android:id="@+id/consolePanel"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:orientation="vertical"
+            android:padding="14dp">
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="RC390_V002_000 — Console"
+                android:textSize="22sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/statusText"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:text="Déconnecté"
+                android:textSize="15sp" />
+
+            <Spinner
+                android:id="@+id/deviceSpinner"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal">
+                <Button
+                    android:id="@+id/refreshButton"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="Actualiser" />
+                <Button
+                    android:id="@+id/connectButton"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="Connexion" />
+            </LinearLayout>
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal">
+                <Button
+                    android:id="@+id/scanButton"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:enabled="false"
+                    android:text="Scanner ECU" />
+                <Button
+                    android:id="@+id/dtcButton"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:enabled="false"
+                    android:text="Lire DTC" />
+            </LinearLayout>
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal">
+                <EditText
+                    android:id="@+id/commandInput"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:hint="Commande brute : 010C"
+                    android:inputType="textCapCharacters"
+                    android:singleLine="true" />
+                <Button
+                    android:id="@+id/sendButton"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:enabled="false"
+                    android:text="Envoyer" />
+            </LinearLayout>
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal">
+                <Button
+                    android:id="@+id/copyButton"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="Copier rapport" />
+                <Button
+                    android:id="@+id/shareButton"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="Partager" />
+            </LinearLayout>
+
+            <ScrollView
+                android:id="@+id/logScroll"
+                android:layout_width="match_parent"
+                android:layout_height="0dp"
+                android:layout_weight="1"
+                android:background="#101010"
+                android:padding="8dp">
+                <TextView
+                    android:id="@+id/logText"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:fontFamily="monospace"
+                    android:textColor="#F0F0F0"
+                    android:textIsSelectable="true"
+                    android:textSize="12sp" />
+            </ScrollView>
+        </LinearLayout>
+
+        <LinearLayout
+            android:id="@+id/graphPanel"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:orientation="vertical"
+            android:padding="12dp"
+            android:visibility="gone">
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Graphique"
+                android:textSize="22sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Barres verticales : orange = sous la normale, vert = normal, rouge = au-dessus."
+                android:textSize="14sp" />
+
+            <HorizontalScrollView
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:fillViewport="true">
+
+                <LinearLayout
+                    android:id="@+id/graphBarsContainer"
+                    android:layout_width="wrap_content"
+                    android:layout_height="match_parent"
+                    android:gravity="bottom"
+                    android:orientation="horizontal"
+                    android:paddingTop="16dp"
+                    android:paddingBottom="16dp" />
+            </HorizontalScrollView>
+        </LinearLayout>
+
+        <LinearLayout
+            android:id="@+id/racingPanel"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:gravity="center"
+            android:orientation="vertical"
+            android:padding="20dp"
+            android:visibility="gone">
+
+            <TextView
+                android:id="@+id/racingState"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:gravity="center"
+                android:text="PAS DE DONNÉES"
+                android:textSize="34sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/racingAlerts"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="22dp"
+                android:gravity="center"
+                android:text="Les valeurs critiques hors plage seront affichées ici en grand."
+                android:textSize="26sp"
+                android:textStyle="bold" />
+        </LinearLayout>
+
+    </FrameLayout>
 </LinearLayout>
