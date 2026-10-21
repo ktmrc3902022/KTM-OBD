@@ -41,6 +41,7 @@ class MainActivity : Activity() {
     private lateinit var sendButton: Button
     private lateinit var commandInput: EditText
     private val devices = mutableListOf<BluetoothDevice>()
+    private var currentDevice: BluetoothDevice? = null
 
     private val bluetoothAdapter: BluetoothAdapter?
         get() = BluetoothAdapter.getDefaultAdapter()
@@ -64,7 +65,7 @@ class MainActivity : Activity() {
         sendButton.setOnClickListener { sendRawCommand() }
         findViewById<Button>(R.id.copyButton).setOnClickListener { copyReport() }
         findViewById<Button>(R.id.shareButton).setOnClickListener { shareReport() }
-        appendLog("KTM OBD V0.1")
+        appendLog("KTM OBD V0.2")
         appendLog("Connexion directe Bluetooth SPP avec OBDLink LX.")
         ensureBluetoothPermission()
     }
@@ -101,6 +102,7 @@ class MainActivity : Activity() {
         }
         val device = devices.getOrNull(deviceSpinner.selectedItemPosition)
         if (device == null) { toast("OBDLink LX non trouvé. Appaire-le d’abord dans Android."); return }
+        currentDevice = device
         val label = device.name ?: device.address
         setBusy(true, "Connexion à " + label + "…")
         executor.execute {
@@ -122,11 +124,42 @@ class MainActivity : Activity() {
         }
     }
 
+    @SuppressLint("MissingPermission")
+    private fun ensureLiveConnection(): Boolean {
+        val device = currentDevice ?: devices.getOrNull(deviceSpinner.selectedItemPosition) ?: return false
+
+        try {
+            val probe = obd.command("0100", 5000)
+            if (probe.uppercase().contains("4100")) return true
+        } catch (_: Exception) {
+            // La socket Android peut rester "connected" alors que le lien RFCOMM est mort.
+        }
+
+        postLog("Liaison Bluetooth interrompue — reconnexion automatique…")
+        return try {
+            obd.close()
+            obd.connect(device)
+            postLog("Bluetooth reconnecté : " + (device.name ?: device.address))
+            obd.initialize().forEach { pair ->
+                postLog("> " + pair.first)
+                postLog(pair.second.ifBlank { "(réponse vide)" })
+            }
+            val probe = obd.command("0100", 8000)
+            postLog("> 0100 (test après reconnexion)")
+            postLog(probe.ifBlank { "(réponse vide)" })
+            probe.uppercase().contains("4100")
+        } catch (e: Exception) {
+            postLog("ERREUR reconnexion : " + e.message)
+            false
+        }
+    }
+
     private fun scanEcu() {
         if (!obd.isConnected) return
         setBusy(true, "Scan des PID supportés…")
         executor.execute {
             try {
+                if (!ensureLiveConnection()) error("ECU inaccessible après tentative de reconnexion")
                 val result = PidScanner.scan(obd)
                 postLog("=== SCAN PID SUPPORTÉS ===")
                 result.transcript.forEach { pair -> postLog("> " + pair.first); postLog(pair.second.ifBlank { "(réponse vide)" }) }
@@ -155,6 +188,7 @@ class MainActivity : Activity() {
         setBusy(true, "Lecture des DTC…")
         executor.execute {
             try {
+                if (!ensureLiveConnection()) error("ECU inaccessible après tentative de reconnexion")
                 val response = obd.command("03", 7000)
                 postLog("> 03  DTC mémorisés")
                 postLog(response.ifBlank { "(réponse vide)" })
@@ -170,6 +204,7 @@ class MainActivity : Activity() {
         setBusy(true, "Commande " + cmd + "…")
         executor.execute {
             try {
+                if (!ensureLiveConnection()) error("ECU inaccessible après tentative de reconnexion")
                 val response = obd.command(cmd, 8000)
                 postLog("> " + cmd.uppercase())
                 postLog(response.ifBlank { "(réponse vide)" })
