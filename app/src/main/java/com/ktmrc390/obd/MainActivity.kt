@@ -31,7 +31,7 @@ import java.util.concurrent.Executors
 
 class MainActivity : Activity() {
     companion object {
-        private const val APP_VERSION = "RC390_V003_000"
+        private const val APP_VERSION = "RC390_V003_001"
         private const val CAN_MAX_LINES = 30000
     }
 
@@ -353,139 +353,76 @@ class MainActivity : Activity() {
         }
     }
 
+    @SuppressLint("MissingPermission")
     private fun startCanCapture() {
-        if (!obd.isConnected || canCaptureRunning) return
+        if (!obd.isConnected || CanCaptureService.isRunning(this)) return
+
+        val device = currentDevice
+            ?: devices.getOrNull(deviceSpinner.selectedItemPosition)
+            ?: run {
+                toast("OBDLink LX non trouvé")
+                return
+            }
+
+        val label = device.name ?: device.address
+
+        // Le service doit posséder seul la liaison Bluetooth pendant la capture.
+        obd.close()
 
         canCaptureRunning = true
-        canCaptureNumber += 1
-        canMarkerNumber = 0
-        canStoredLines = 0
-        canDroppedLines = 0
-        canCaptureStartElapsed = SystemClock.elapsedRealtime()
-
-        synchronized(rawCanLog) {
-            rawCanLog.append("\n=== CAPTURE CAN #")
-                .append(canCaptureNumber)
-                .append(" — ")
-                .append(Date())
-                .append(" ===\n")
+        val intent = Intent(this, CanCaptureService::class.java).apply {
+            action = CanCaptureService.ACTION_START
+            putExtra(CanCaptureService.EXTRA_DEVICE_ADDRESS, device.address)
+            putExtra(CanCaptureService.EXTRA_DEVICE_NAME, label)
         }
 
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            startForegroundService(intent)
+        } else {
+            startService(intent)
+        }
+
+        appendLog("Capture CAN de fond demandée : $label")
+        statusText.text = "Démarrage capture CAN de fond…"
         updateCaptureUi()
-        statusText.text = "Préparation capture CAN…"
-
-        executor.execute {
-            try {
-                if (!ensureLiveConnection()) {
-                    error("ECU inaccessible après tentative de reconnexion")
-                }
-
-                postLog("=== CAPTURE CAN #$canCaptureNumber ===")
-
-                obd.prepareCanMonitor().forEach { pair ->
-                    postLog("> " + pair.first)
-                    postLog(pair.second.ifBlank { "(réponse vide)" })
-
-                    synchronized(rawCanLog) {
-                        rawCanLog.append("# ")
-                            .append(pair.first)
-                            .append(" -> ")
-                            .append(pair.second.replace("\r", " ").replace("\n", " "))
-                            .append("\n")
-                    }
-                }
-
-                canCaptureStartElapsed = SystemClock.elapsedRealtime()
-                mainHandler.post {
-                    statusText.text = "Capture CAN en cours"
-                }
-
-                val received = obd.monitorAll { rawLine ->
-                    val elapsed = SystemClock.elapsedRealtime() - canCaptureStartElapsed
-
-                    synchronized(rawCanLog) {
-                        if (canStoredLines < CAN_MAX_LINES) {
-                            rawCanLog.append(elapsed)
-                                .append(" ms | ")
-                                .append(rawLine)
-                                .append("\n")
-                            canStoredLines += 1
-                        } else {
-                            canDroppedLines += 1
-                        }
-                    }
-                }
-
-                synchronized(rawCanLog) {
-                    rawCanLog.append("# FIN CAPTURE #")
-                        .append(canCaptureNumber)
-                        .append(" — lignes reçues: ")
-                        .append(received)
-                        .append(", stockées: ")
-                        .append(canStoredLines)
-                        .append(", ignorées: ")
-                        .append(canDroppedLines)
-                        .append("\n")
-                }
-
-                postLog(
-                    "Capture CAN terminée : $received lignes reçues, " +
-                        "$canStoredLines stockées, $canDroppedLines ignorées."
-                )
-            } catch (e: Exception) {
-                postLog("ERREUR capture CAN : " + e.message)
-
-                synchronized(rawCanLog) {
-                    rawCanLog.append("# ERREUR CAN: ")
-                        .append(e.message)
-                        .append("\n")
-                }
-            } finally {
-                try {
-                    Thread.sleep(150)
-                    obd.restoreAfterCanMonitor().forEach { pair ->
-                        postLog("> " + pair.first)
-                        postLog(pair.second.ifBlank { "(réponse vide)" })
-                    }
-                } catch (e: Exception) {
-                    postLog("ERREUR restauration OBD : " + e.message)
-                }
-
-                canCaptureRunning = false
-
-                mainHandler.post {
-                    updateCaptureUi()
-                    statusText.text = if (obd.isConnected) {
-                        "Connecté — capture CAN terminée"
-                    } else {
-                        "Déconnecté"
-                    }
-                }
-            }
-        }
+        mainHandler.postDelayed({ refreshCaptureState() }, 1500)
     }
 
     private fun stopCanCapture() {
-        if (!canCaptureRunning) return
+        if (!CanCaptureService.isRunning(this)) {
+            refreshCaptureState()
+            return
+        }
 
         statusText.text = "Arrêt capture CAN…"
-        obd.stopMonitor()
+        startService(
+            Intent(this, CanCaptureService::class.java).apply {
+                action = CanCaptureService.ACTION_STOP
+            }
+        )
+        mainHandler.postDelayed({ refreshCaptureState() }, 800)
     }
 
     private fun addCanMarker() {
-        if (!canCaptureRunning) return
-
-        canMarkerNumber += 1
-        val elapsed = SystemClock.elapsedRealtime() - canCaptureStartElapsed
-
-        synchronized(rawCanLog) {
-            rawCanLog.append(elapsed)
-                .append(" ms | # MARQUEUR ")
-                .append(canMarkerNumber)
-                .append("\n")
+        if (!CanCaptureService.isRunning(this)) {
+            refreshCaptureState()
+            return
         }
 
-        appendLog("Marqueur CAN #$canMarkerNumber à ${elapsed} ms")
+        startService(
+            Intent(this, CanCaptureService::class.java).apply {
+                action = CanCaptureService.ACTION_MARKER
+            }
+        )
+        appendLog("Marqueur CAN envoyé")
+        mainHandler.postDelayed({ refreshCaptureState() }, 150)
+    }
+
+    private fun refreshCaptureState() {
+        canCaptureRunning = CanCaptureService.isRunning(this)
+        val state = CanCaptureService.status(this)
+        if (state.isNotBlank()) statusText.text = state
+        updateCaptureUi()
     }
 
     private fun sendRawCommand() {
@@ -526,14 +463,15 @@ class MainActivity : Activity() {
 
     private fun updateCaptureUi() {
         val connected = obd.isConnected
+        val running = canCaptureRunning || CanCaptureService.isRunning(this)
 
-        connectButton.isEnabled = !canCaptureRunning
-        scanButton.isEnabled = connected && !canCaptureRunning
-        dtcButton.isEnabled = connected && !canCaptureRunning
-        sendButton.isEnabled = connected && !canCaptureRunning
-        canButton.isEnabled = connected
-        canButton.text = if (canCaptureRunning) "Arrêter CAN" else "Démarrer CAN"
-        markerButton.isEnabled = connected && canCaptureRunning
+        connectButton.isEnabled = !running
+        scanButton.isEnabled = connected && !running
+        dtcButton.isEnabled = connected && !running
+        sendButton.isEnabled = connected && !running
+        canButton.isEnabled = running || connected
+        canButton.text = if (running) "Arrêter CAN" else "Démarrer CAN"
+        markerButton.isEnabled = running
     }
 
     private fun setBusy(busy: Boolean, message: String?) {
@@ -558,12 +496,16 @@ class MainActivity : Activity() {
     }
 
     private fun reportText(): String {
-        val canSection = synchronized(rawCanLog) {
-            if (rawCanLog.isEmpty()) {
-                ""
-            } else {
-                "\n\n=== DONNÉES CAN BRUTES ===\n" + rawCanLog.toString()
-            }
+        val persistentCapture = try {
+            CanCaptureService.reportFile(this)?.readText(Charsets.UTF_8).orEmpty()
+        } catch (e: Exception) {
+            "ERREUR lecture capture persistante : ${e.message}"
+        }
+
+        val canSection = if (persistentCapture.isBlank()) {
+            ""
+        } else {
+            "\n\n=== DERNIÈRE CAPTURE CAN PERSISTANTE ===\n$persistentCapture"
         }
 
         return "$APP_VERSION — rapport ${Date()}\n\n${logText.text}$canSection"
@@ -591,10 +533,17 @@ class MainActivity : Activity() {
         Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
     }
 
+    override fun onResume() {
+        super.onResume()
+        refreshCaptureState()
+    }
+
     override fun onDestroy() {
-        try { obd.stopMonitor() } catch (_: Exception) {}
+        // La capture CAN appartient au service de premier plan.
+        // Ne pas l'arrêter quand Android recrée ou ferme seulement l'interface.
         obd.close()
         executor.shutdownNow()
         super.onDestroy()
     }
+
 }
