@@ -115,12 +115,12 @@
                     android:enabled="false"
                     android:text="Démarrer CAN" />
                 <Button
-                    android:id="@+id/markerButton"
+                    android:id="@+id/saveDataButton"
                     android:layout_width="0dp"
                     android:layout_height="wrap_content"
                     android:layout_weight="1"
                     android:enabled="false"
-                    android:text="Marqueur" />
+                    android:text="Save data" />
             </LinearLayout>
 
             <LinearLayout
