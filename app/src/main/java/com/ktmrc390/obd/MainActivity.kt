@@ -14,11 +14,12 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
-import android.widget.ArrayAdapter
-import android.widget.LinearLayout
+import android.os.SystemClock
 import android.view.View
+import android.widget.ArrayAdapter
 import android.widget.Button
 import android.widget.EditText
+import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.Spinner
 import android.widget.TextView
@@ -29,6 +30,11 @@ import java.util.Locale
 import java.util.concurrent.Executors
 
 class MainActivity : Activity() {
+    companion object {
+        private const val APP_VERSION = "RC390_V003_000"
+        private const val CAN_MAX_LINES = 30000
+    }
+
     private val executor = Executors.newSingleThreadExecutor()
     private val mainHandler = Handler(Looper.getMainLooper())
     private val obd = ObdClient()
@@ -40,6 +46,8 @@ class MainActivity : Activity() {
     private lateinit var connectButton: Button
     private lateinit var scanButton: Button
     private lateinit var dtcButton: Button
+    private lateinit var canButton: Button
+    private lateinit var markerButton: Button
     private lateinit var sendButton: Button
     private lateinit var commandInput: EditText
     private lateinit var consolePanel: View
@@ -48,8 +56,17 @@ class MainActivity : Activity() {
     private lateinit var graphBarsContainer: LinearLayout
     private lateinit var racingState: TextView
     private lateinit var racingAlerts: TextView
+
     private val devices = mutableListOf<BluetoothDevice>()
     private var currentDevice: BluetoothDevice? = null
+
+    private val rawCanLog = StringBuilder()
+    @Volatile private var canCaptureRunning = false
+    private var canCaptureNumber = 0
+    private var canMarkerNumber = 0
+    private var canCaptureStartElapsed = 0L
+    private var canStoredLines = 0
+    private var canDroppedLines = 0
 
     private val bluetoothAdapter: BluetoothAdapter?
         get() = BluetoothAdapter.getDefaultAdapter()
@@ -57,6 +74,7 @@ class MainActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
+
         deviceSpinner = findViewById(R.id.deviceSpinner)
         statusText = findViewById(R.id.statusText)
         logText = findViewById(R.id.logText)
@@ -64,6 +82,8 @@ class MainActivity : Activity() {
         connectButton = findViewById(R.id.connectButton)
         scanButton = findViewById(R.id.scanButton)
         dtcButton = findViewById(R.id.dtcButton)
+        canButton = findViewById(R.id.canButton)
+        markerButton = findViewById(R.id.markerButton)
         sendButton = findViewById(R.id.sendButton)
         commandInput = findViewById(R.id.commandInput)
         consolePanel = findViewById(R.id.consolePanel)
@@ -76,15 +96,22 @@ class MainActivity : Activity() {
         findViewById<Button>(R.id.navConsole).setOnClickListener { showPanel("console") }
         findViewById<Button>(R.id.navGraphique).setOnClickListener { showPanel("graph") }
         findViewById<Button>(R.id.navRacing).setOnClickListener { showPanel("racing") }
+
         populateGraphBars()
+
         findViewById<Button>(R.id.refreshButton).setOnClickListener { loadBondedDevices() }
         connectButton.setOnClickListener { toggleConnection() }
         scanButton.setOnClickListener { scanEcu() }
         dtcButton.setOnClickListener { readDtcs() }
+        canButton.setOnClickListener {
+            if (canCaptureRunning) stopCanCapture() else startCanCapture()
+        }
+        markerButton.setOnClickListener { addCanMarker() }
         sendButton.setOnClickListener { sendRawCommand() }
         findViewById<Button>(R.id.copyButton).setOnClickListener { copyReport() }
         findViewById<Button>(R.id.shareButton).setOnClickListener { shareReport() }
-        appendLog("RC390_V002_000")
+
+        appendLog(APP_VERSION)
         appendLog("Connexion directe Bluetooth SPP avec OBDLink LX.")
         ensureBluetoothPermission()
     }
@@ -113,58 +140,109 @@ class MainActivity : Activity() {
             checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED
         ) {
             requestPermissions(arrayOf(Manifest.permission.BLUETOOTH_CONNECT), 100)
-        } else loadBondedDevices()
+        } else {
+            loadBondedDevices()
+        }
     }
 
-    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<out String>,
+        grantResults: IntArray
+    ) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-        if (requestCode == 100 && grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED) loadBondedDevices()
-        else toast("Permission Bluetooth nécessaire")
+        if (requestCode == 100 && grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED) {
+            loadBondedDevices()
+        } else {
+            toast("Permission Bluetooth nécessaire")
+        }
     }
 
     @SuppressLint("MissingPermission")
     private fun loadBondedDevices() {
-        val adapter = bluetoothAdapter ?: run { toast("Bluetooth indisponible"); return }
-        if (!adapter.isEnabled) { toast("Active le Bluetooth puis Actualiser"); return }
+        val adapter = bluetoothAdapter ?: run {
+            toast("Bluetooth indisponible")
+            return
+        }
+
+        if (!adapter.isEnabled) {
+            toast("Active le Bluetooth puis Actualiser")
+            return
+        }
+
         devices.clear()
         devices += adapter.bondedDevices.sortedBy { it.name ?: it.address }
-        val labels = devices.map { (it.name ?: "Appareil Bluetooth") + " — " + it.address }
-        deviceSpinner.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, labels.ifEmpty { listOf("Aucun appareil appairé") })
+
+        val labels = devices.map {
+            (it.name ?: "Appareil Bluetooth") + " — " + it.address
+        }
+
+        deviceSpinner.adapter = ArrayAdapter(
+            this,
+            android.R.layout.simple_spinner_dropdown_item,
+            labels.ifEmpty { listOf("Aucun appareil appairé") }
+        )
+
         appendLog("Appareils appairés : " + devices.size)
     }
 
     @SuppressLint("MissingPermission")
     private fun toggleConnection() {
+        if (canCaptureRunning) return
+
         if (obd.isConnected) {
-            obd.close(); setConnected(false); appendLog("Déconnecté."); return
+            obd.close()
+            setConnected(false)
+            appendLog("Déconnecté.")
+            return
         }
+
         val device = devices.getOrNull(deviceSpinner.selectedItemPosition)
-        if (device == null) { toast("OBDLink LX non trouvé. Appaire-le d’abord dans Android."); return }
+        if (device == null) {
+            toast("OBDLink LX non trouvé. Appaire-le d’abord dans Android.")
+            return
+        }
+
         currentDevice = device
         val label = device.name ?: device.address
-        setBusy(true, "Connexion à " + label + "…")
+        setBusy(true, "Connexion à $label…")
+
         executor.execute {
             try {
                 obd.connect(device)
-                postLog("Bluetooth connecté : " + label)
+                postLog("Bluetooth connecté : $label")
+
                 obd.initialize().forEach { pair ->
                     postLog("> " + pair.first)
                     postLog(pair.second.ifBlank { "(réponse vide)" })
                 }
+
                 val probe = obd.command("0100", 8000)
                 postLog("> 0100")
                 postLog(probe.ifBlank { "(réponse vide)" })
-                mainHandler.post { setConnected(true); statusText.text = "Connecté — ECU joignable" }
+
+                mainHandler.post {
+                    setConnected(true)
+                    statusText.text = "Connecté — ECU joignable"
+                }
             } catch (e: Exception) {
-                obd.close(); postLog("ERREUR connexion : " + e.message)
-                mainHandler.post { setConnected(false); statusText.text = "Échec connexion" }
-            } finally { mainHandler.post { setBusy(false, null) } }
+                obd.close()
+                postLog("ERREUR connexion : " + e.message)
+                mainHandler.post {
+                    setConnected(false)
+                    statusText.text = "Échec connexion"
+                }
+            } finally {
+                mainHandler.post { setBusy(false, null) }
+            }
         }
     }
 
     @SuppressLint("MissingPermission")
     private fun ensureLiveConnection(): Boolean {
-        val device = currentDevice ?: devices.getOrNull(deviceSpinner.selectedItemPosition) ?: return false
+        val device = currentDevice
+            ?: devices.getOrNull(deviceSpinner.selectedItemPosition)
+            ?: return false
 
         try {
             val probe = obd.command("0100", 5000)
@@ -174,14 +252,17 @@ class MainActivity : Activity() {
         }
 
         postLog("Liaison Bluetooth interrompue — reconnexion automatique…")
+
         return try {
             obd.close()
             obd.connect(device)
             postLog("Bluetooth reconnecté : " + (device.name ?: device.address))
+
             obd.initialize().forEach { pair ->
                 postLog("> " + pair.first)
                 postLog(pair.second.ifBlank { "(réponse vide)" })
             }
+
             val probe = obd.command("0100", 8000)
             postLog("> 0100 (test après reconnexion)")
             postLog(probe.ifBlank { "(réponse vide)" })
@@ -193,107 +274,327 @@ class MainActivity : Activity() {
     }
 
     private fun scanEcu() {
-        if (!obd.isConnected) return
+        if (!obd.isConnected || canCaptureRunning) return
+
         setBusy(true, "Scan des PID supportés…")
+
         executor.execute {
             try {
-                if (!ensureLiveConnection()) error("ECU inaccessible après tentative de reconnexion")
+                if (!ensureLiveConnection()) {
+                    error("ECU inaccessible après tentative de reconnexion")
+                }
+
                 val result = PidScanner.scan(obd)
+
                 postLog("=== SCAN PID SUPPORTÉS ===")
-                result.transcript.forEach { pair -> postLog("> " + pair.first); postLog(pair.second.ifBlank { "(réponse vide)" }) }
+                result.transcript.forEach { pair ->
+                    postLog("> " + pair.first)
+                    postLog(pair.second.ifBlank { "(réponse vide)" })
+                }
+
                 postLog("PID annoncés par l’ECU : " + result.supportedPids.size)
-                result.supportedPids.forEach { pid -> postLog("01%02X  ".format(pid) + PidScanner.name(pid)) }
+                result.supportedPids.forEach { pid ->
+                    postLog("01%02X  ".format(pid) + PidScanner.name(pid))
+                }
+
                 postLog("=== LECTURE BRUTE DES PID ===")
+
                 result.supportedPids
-                    .filter { it !in setOf(0x20,0x40,0x60,0x80,0xA0,0xC0,0xE0) }
+                    .filter { it !in setOf(0x20, 0x40, 0x60, 0x80, 0xA0, 0xC0, 0xE0) }
                     .forEach { pid ->
                         val cmd = "01%02X".format(pid)
-                        val response = try { obd.command(cmd, 3500) } catch (e: Exception) { "ERREUR: " + e.message }
-                        postLog("> " + cmd + "  " + PidScanner.name(pid))
+                        val response = try {
+                            obd.command(cmd, 3500)
+                        } catch (e: Exception) {
+                            "ERREUR: " + e.message
+                        }
+
+                        postLog("> $cmd  " + PidScanner.name(pid))
                         postLog(response.ifBlank { "(réponse vide)" })
                     }
-                val vin = try { obd.command("0902", 7000) } catch (_: Exception) { "" }
+
+                val vin = try {
+                    obd.command("0902", 7000)
+                } catch (_: Exception) {
+                    ""
+                }
+
                 postLog("> 0902  VIN")
                 postLog(vin.ifBlank { "(non disponible)" })
                 postLog("=== FIN DU SCAN ===")
-            } catch (e: Exception) { postLog("ERREUR scan : " + e.message) }
-            finally { mainHandler.post { setBusy(false, null) } }
+            } catch (e: Exception) {
+                postLog("ERREUR scan : " + e.message)
+            } finally {
+                mainHandler.post { setBusy(false, null) }
+            }
         }
     }
 
     private fun readDtcs() {
-        if (!obd.isConnected) return
+        if (!obd.isConnected || canCaptureRunning) return
+
         setBusy(true, "Lecture des DTC…")
+
         executor.execute {
             try {
-                if (!ensureLiveConnection()) error("ECU inaccessible après tentative de reconnexion")
+                if (!ensureLiveConnection()) {
+                    error("ECU inaccessible après tentative de reconnexion")
+                }
+
                 val response = obd.command("03", 7000)
                 postLog("> 03  DTC mémorisés")
                 postLog(response.ifBlank { "(réponse vide)" })
-                postLog("V0 : aucun effacement automatique des défauts.")
-            } catch (e: Exception) { postLog("ERREUR DTC : " + e.message) }
-            finally { mainHandler.post { setBusy(false, null) } }
+                postLog("Aucun effacement automatique des défauts.")
+            } catch (e: Exception) {
+                postLog("ERREUR DTC : " + e.message)
+            } finally {
+                mainHandler.post { setBusy(false, null) }
+            }
         }
+    }
+
+    private fun startCanCapture() {
+        if (!obd.isConnected || canCaptureRunning) return
+
+        canCaptureRunning = true
+        canCaptureNumber += 1
+        canMarkerNumber = 0
+        canStoredLines = 0
+        canDroppedLines = 0
+        canCaptureStartElapsed = SystemClock.elapsedRealtime()
+
+        synchronized(rawCanLog) {
+            rawCanLog.append("\n=== CAPTURE CAN #")
+                .append(canCaptureNumber)
+                .append(" — ")
+                .append(Date())
+                .append(" ===\n")
+        }
+
+        updateCaptureUi()
+        statusText.text = "Préparation capture CAN…"
+
+        executor.execute {
+            try {
+                if (!ensureLiveConnection()) {
+                    error("ECU inaccessible après tentative de reconnexion")
+                }
+
+                postLog("=== CAPTURE CAN #$canCaptureNumber ===")
+
+                obd.prepareCanMonitor().forEach { pair ->
+                    postLog("> " + pair.first)
+                    postLog(pair.second.ifBlank { "(réponse vide)" })
+
+                    synchronized(rawCanLog) {
+                        rawCanLog.append("# ")
+                            .append(pair.first)
+                            .append(" -> ")
+                            .append(pair.second.replace("\r", " ").replace("\n", " "))
+                            .append("\n")
+                    }
+                }
+
+                canCaptureStartElapsed = SystemClock.elapsedRealtime()
+                mainHandler.post {
+                    statusText.text = "Capture CAN en cours"
+                }
+
+                val received = obd.monitorAll { rawLine ->
+                    val elapsed = SystemClock.elapsedRealtime() - canCaptureStartElapsed
+
+                    synchronized(rawCanLog) {
+                        if (canStoredLines < CAN_MAX_LINES) {
+                            rawCanLog.append(elapsed)
+                                .append(" ms | ")
+                                .append(rawLine)
+                                .append("\n")
+                            canStoredLines += 1
+                        } else {
+                            canDroppedLines += 1
+                        }
+                    }
+                }
+
+                synchronized(rawCanLog) {
+                    rawCanLog.append("# FIN CAPTURE #")
+                        .append(canCaptureNumber)
+                        .append(" — lignes reçues: ")
+                        .append(received)
+                        .append(", stockées: ")
+                        .append(canStoredLines)
+                        .append(", ignorées: ")
+                        .append(canDroppedLines)
+                        .append("\n")
+                }
+
+                postLog(
+                    "Capture CAN terminée : $received lignes reçues, " +
+                        "$canStoredLines stockées, $canDroppedLines ignorées."
+                )
+            } catch (e: Exception) {
+                postLog("ERREUR capture CAN : " + e.message)
+
+                synchronized(rawCanLog) {
+                    rawCanLog.append("# ERREUR CAN: ")
+                        .append(e.message)
+                        .append("\n")
+                }
+            } finally {
+                try {
+                    Thread.sleep(150)
+                    obd.restoreAfterCanMonitor().forEach { pair ->
+                        postLog("> " + pair.first)
+                        postLog(pair.second.ifBlank { "(réponse vide)" })
+                    }
+                } catch (e: Exception) {
+                    postLog("ERREUR restauration OBD : " + e.message)
+                }
+
+                canCaptureRunning = false
+
+                mainHandler.post {
+                    updateCaptureUi()
+                    statusText.text = if (obd.isConnected) {
+                        "Connecté — capture CAN terminée"
+                    } else {
+                        "Déconnecté"
+                    }
+                }
+            }
+        }
+    }
+
+    private fun stopCanCapture() {
+        if (!canCaptureRunning) return
+
+        statusText.text = "Arrêt capture CAN…"
+        obd.stopMonitor()
+    }
+
+    private fun addCanMarker() {
+        if (!canCaptureRunning) return
+
+        canMarkerNumber += 1
+        val elapsed = SystemClock.elapsedRealtime() - canCaptureStartElapsed
+
+        synchronized(rawCanLog) {
+            rawCanLog.append(elapsed)
+                .append(" ms | # MARQUEUR ")
+                .append(canMarkerNumber)
+                .append("\n")
+        }
+
+        appendLog("Marqueur CAN #$canMarkerNumber à ${elapsed} ms")
     }
 
     private fun sendRawCommand() {
         val cmd = commandInput.text.toString().trim()
-        if (cmd.isBlank() || !obd.isConnected) return
-        setBusy(true, "Commande " + cmd + "…")
+        if (cmd.isBlank() || !obd.isConnected || canCaptureRunning) return
+
+        setBusy(true, "Commande $cmd…")
+
         executor.execute {
             try {
-                if (!ensureLiveConnection()) error("ECU inaccessible après tentative de reconnexion")
+                if (!ensureLiveConnection()) {
+                    error("ECU inaccessible après tentative de reconnexion")
+                }
+
                 val response = obd.command(cmd, 8000)
                 postLog("> " + cmd.uppercase())
                 postLog(response.ifBlank { "(réponse vide)" })
-            } catch (e: Exception) { postLog("ERREUR commande : " + e.message) }
-            finally { mainHandler.post { setBusy(false, null) } }
+            } catch (e: Exception) {
+                postLog("ERREUR commande : " + e.message)
+            } finally {
+                mainHandler.post { setBusy(false, null) }
+            }
         }
     }
 
     private fun setConnected(connected: Boolean) {
         connectButton.text = if (connected) "Déconnexion" else "Connexion"
-        scanButton.isEnabled = connected
-        dtcButton.isEnabled = connected
-        sendButton.isEnabled = connected
-        if (!connected) statusText.text = "Déconnecté"
+        scanButton.isEnabled = connected && !canCaptureRunning
+        dtcButton.isEnabled = connected && !canCaptureRunning
+        sendButton.isEnabled = connected && !canCaptureRunning
+        canButton.isEnabled = connected
+        markerButton.isEnabled = connected && canCaptureRunning
+
+        if (!connected) {
+            statusText.text = "Déconnecté"
+        }
+    }
+
+    private fun updateCaptureUi() {
+        val connected = obd.isConnected
+
+        connectButton.isEnabled = !canCaptureRunning
+        scanButton.isEnabled = connected && !canCaptureRunning
+        dtcButton.isEnabled = connected && !canCaptureRunning
+        sendButton.isEnabled = connected && !canCaptureRunning
+        canButton.isEnabled = connected
+        canButton.text = if (canCaptureRunning) "Arrêter CAN" else "Démarrer CAN"
+        markerButton.isEnabled = connected && canCaptureRunning
     }
 
     private fun setBusy(busy: Boolean, message: String?) {
         if (message != null) statusText.text = message
-        connectButton.isEnabled = !busy
-        scanButton.isEnabled = !busy && obd.isConnected
-        dtcButton.isEnabled = !busy && obd.isConnected
-        sendButton.isEnabled = !busy && obd.isConnected
+
+        connectButton.isEnabled = !busy && !canCaptureRunning
+        scanButton.isEnabled = !busy && obd.isConnected && !canCaptureRunning
+        dtcButton.isEnabled = !busy && obd.isConnected && !canCaptureRunning
+        sendButton.isEnabled = !busy && obd.isConnected && !canCaptureRunning
+        canButton.isEnabled = !busy && obd.isConnected
+        markerButton.isEnabled = !busy && obd.isConnected && canCaptureRunning
     }
 
     private fun appendLog(message: String) {
         val time = SimpleDateFormat("HH:mm:ss", Locale.FRANCE).format(Date())
-        logText.append("[" + time + "] " + message + "\n")
+        logText.append("[$time] $message\n")
         logScroll.post { logScroll.fullScroll(ScrollView.FOCUS_DOWN) }
     }
 
-    private fun postLog(message: String) { mainHandler.post { appendLog(message) } }
-    private fun reportText(): String = "RC390_V002_000 — rapport " + Date() + "\n\n" + logText.text
+    private fun postLog(message: String) {
+        mainHandler.post { appendLog(message) }
+    }
+
+    private fun reportText(): String {
+        val canSection = synchronized(rawCanLog) {
+            if (rawCanLog.isEmpty()) {
+                ""
+            } else {
+                "\n\n=== DONNÉES CAN BRUTES ===\n" + rawCanLog.toString()
+            }
+        }
+
+        return "$APP_VERSION — rapport ${Date()}\n\n${logText.text}$canSection"
+    }
 
     private fun copyReport() {
         val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-        clipboard.setPrimaryClip(ClipData.newPlainText("RC390_V002_000 report", reportText()))
+        clipboard.setPrimaryClip(
+            ClipData.newPlainText("$APP_VERSION report", reportText())
+        )
         toast("Rapport copié")
     }
 
     private fun shareReport() {
         val intent = Intent(Intent.ACTION_SEND).apply {
             type = "text/plain"
-            putExtra(Intent.EXTRA_SUBJECT, "RC390_V002_000 — rapport")
+            putExtra(Intent.EXTRA_SUBJECT, "$APP_VERSION — rapport")
             putExtra(Intent.EXTRA_TEXT, reportText())
         }
+
         startActivity(Intent.createChooser(intent, "Partager le rapport"))
     }
 
-    private fun toast(message: String) = Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
+    private fun toast(message: String) {
+        Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
+    }
 
     override fun onDestroy() {
-        obd.close(); executor.shutdownNow(); super.onDestroy()
+        try { obd.stopMonitor() } catch (_: Exception) {}
+        obd.close()
+        executor.shutdownNow()
+        super.onDestroy()
     }
 }
