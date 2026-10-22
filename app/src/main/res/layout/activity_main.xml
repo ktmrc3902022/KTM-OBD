@@ -47,7 +47,7 @@
             <TextView
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:text="RC390_V003_000 — Console"
+                android:text="RC390_V003_001 — Console"
                 android:textSize="22sp"
                 android:textStyle="bold" />
 
