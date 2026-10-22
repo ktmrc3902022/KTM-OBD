@@ -31,7 +31,7 @@ import java.util.concurrent.Executors
 
 class MainActivity : Activity() {
     companion object {
-        private const val APP_VERSION = "RC390_V003_001"
+        private const val APP_VERSION = "RC390_V003_002"
         private const val CAN_MAX_LINES = 30000
     }
 
