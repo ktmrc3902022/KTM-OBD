@@ -18,9 +18,9 @@ jobs:
       - name: Build debug APK
         run: gradle :app:assembleDebug --stacktrace
       - name: Rename APK
-        run: cp app/build/outputs/apk/debug/app-debug.apk RC390_V003_000.apk
+        run: cp app/build/outputs/apk/debug/app-debug.apk RC390_V003_001.apk
       - uses: actions/upload-artifact@v4
         with:
-          name: RC390_V003_000
-          path: RC390_V003_000.apk
+          name: RC390_V003_001
+          path: RC390_V003_001.apk
           if-no-files-found: error
