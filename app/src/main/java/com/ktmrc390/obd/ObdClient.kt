@@ -10,6 +10,7 @@ import java.util.UUID
 class ObdClient {
     companion object {
         private val SPP_UUID: UUID = UUID.fromString("00001101-0000-1000-8000-00805F9B34FB")
+        private const val MONITOR_BATCH_SIZE = 1000
     }
 
     private var socket: BluetoothSocket? = null
@@ -77,16 +78,28 @@ class ObdClient {
 
     fun prepareCanMonitor(): List<Pair<String, String>> {
         val out = mutableListOf<Pair<String, String>>()
-        listOf("ATDP", "ATDPN", "ATH1", "ATS1", "ATCAF0", "ATAL").forEach { cmd ->
+        listOf(
+            "ATDP",
+            "ATDPN",
+            "ATH1",
+            "ATS0",
+            "ATCAF0",
+            "ATAL",
+            "STCMM0",
+            "STFAC",
+            "ATCF000",
+            "ATCM000",
+            "STFPA000,000"
+        ).forEach { cmd ->
             out += cmd to command(cmd, 3000)
         }
         return out
     }
 
     /**
-     * Lance ATMA et transmet chaque ligne CAN brute au callback.
-     * La capture continue jusqu'à stopMonitor(), jusqu'au prompt '>',
-     * ou jusqu'à une fermeture de la liaison.
+     * Capture le CAN brut avec la commande native OBDLink STM.
+     * La lecture est découpée en lots finis afin d'éviter qu'une session
+     * de monitoring illimitée ne se termine sur BUFFER FULL.
      */
     fun monitorAll(onLine: (String) -> Unit): Int {
         if (monitorActive) error("Capture CAN déjà en cours")
@@ -98,38 +111,39 @@ class ObdClient {
 
         monitorStopRequestedAt = 0L
         monitorActive = true
-
-        var lineCount = 0
-        val line = StringBuilder()
+        var totalLineCount = 0
 
         try {
-            o.write("ATMA\r".toByteArray(Charsets.US_ASCII))
-            o.flush()
+            while (monitorStopRequestedAt == 0L) {
+                o.write(("STM $MONITOR_BATCH_SIZE\r").toByteArray(Charsets.US_ASCII))
+                o.flush()
 
-            while (true) {
-                if (monitorStopRequestedAt != 0L &&
-                    System.currentTimeMillis() - monitorStopRequestedAt > 3000L
-                ) {
-                    break
-                }
+                val line = StringBuilder()
+                var promptSeen = false
 
-                if (i.available() > 0) {
-                    val b = i.read()
-                    if (b < 0) break
-
-                    val c = b.toChar()
-                    if (c == '>') {
-                        emitMonitorLine(line, onLine)?.let { lineCount += it }
-                        break
+                while (!promptSeen) {
+                    if (monitorStopRequestedAt != 0L &&
+                        System.currentTimeMillis() - monitorStopRequestedAt > 3000L
+                    ) {
+                        return totalLineCount
                     }
 
-                    if (c == '\r' || c == '\n') {
-                        emitMonitorLine(line, onLine)?.let { lineCount += it }
-                    } else if (c != '\u0000') {
-                        line.append(c)
+                    if (i.available() > 0) {
+                        val b = i.read()
+                        if (b < 0) return totalLineCount
+
+                        val c = b.toChar()
+                        if (c == '>') {
+                            emitMonitorLine(line, onLine)?.let { totalLineCount += it }
+                            promptSeen = true
+                        } else if (c == '\r' || c == '\n') {
+                            emitMonitorLine(line, onLine)?.let { totalLineCount += it }
+                        } else if (c != '\u0000') {
+                            line.append(c)
+                        }
+                    } else {
+                        Thread.sleep(1)
                     }
-                } else {
-                    Thread.sleep(2)
                 }
             }
         } finally {
@@ -137,16 +151,37 @@ class ObdClient {
             monitorStopRequestedAt = 0L
         }
 
-        return lineCount
+        return totalLineCount
     }
 
     private fun emitMonitorLine(line: StringBuilder, onLine: (String) -> Unit): Int? {
         if (line.isEmpty()) return null
+
         val value = line.toString().trim()
         line.setLength(0)
         if (value.isBlank()) return null
-        onLine(value)
+
+        val upper = value.uppercase()
+        if (upper == "STOPPED") return null
+        if (upper == "BUFFER FULL") {
+            onLine("# OBDLINK BUFFER FULL — relance automatique")
+            return null
+        }
+
+        onLine(formatRawCanLine(value))
         return 1
+    }
+
+    private fun formatRawCanLine(value: String): String {
+        val compact = value.replace(" ", "").uppercase()
+        if (!compact.matches(Regex("^[0-9A-F]+$"))) return value
+        if (compact.length < 3 || compact.length > 19 || compact.length % 2 == 0) return value
+
+        val id = compact.substring(0, 3)
+        val payload = compact.substring(3)
+            .chunked(2)
+            .joinToString(" ")
+        return if (payload.isBlank()) id else "$id $payload"
     }
 
     fun stopMonitor() {
