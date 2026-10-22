@@ -103,10 +103,10 @@ class CanCaptureService : Service() {
         try {
             val dir = File(filesDir, "captures").apply { mkdirs() }
             val stamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
-            reportFile = File(dir, "RC390_V003_002_CAN_${stamp}.txt")
+            reportFile = File(dir, "RC390_V003_003_CAN_${stamp}.txt")
             writer = FileOutputStream(reportFile, false).bufferedWriter(Charsets.UTF_8)
 
-            writeLine("RC390_V003_002 — capture CAN brute")
+            writeLine("RC390_V003_003 — capture CAN brute")
             writeLine("Début : ${Date()}")
             writeLine("Appareil : $deviceName")
             writeLine("Adresse Bluetooth : $address")
