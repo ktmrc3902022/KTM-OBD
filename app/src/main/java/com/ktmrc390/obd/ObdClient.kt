@@ -10,7 +10,6 @@ import java.util.UUID
 class ObdClient {
     companion object {
         private val SPP_UUID: UUID = UUID.fromString("00001101-0000-1000-8000-00805F9B34FB")
-        private const val MONITOR_BATCH_SIZE = 1000
     }
 
     private var socket: BluetoothSocket? = null
@@ -97,9 +96,12 @@ class ObdClient {
     }
 
     /**
-     * Capture le CAN brut avec la commande native OBDLink STM.
-     * La lecture est découpée en lots finis afin d'éviter qu'une session
-     * de monitoring illimitée ne se termine sur BUFFER FULL.
+     * Capture le CAN brut avec la commande native OBDLink/STN "STM".
+     *
+     * Le STN1155 v5.6.19 de l'OBDLink LX utilisé sur la RC390 n'accepte pas
+     * la syntaxe récente "STM n" : il répond alors simplement "?".
+     * Sur ce firmware, STM reste en écoute continue jusqu'à réception d'un
+     * caractère. stopMonitor() envoie donc un CR pour rendre le prompt.
      */
     fun monitorAll(onLine: (String) -> Unit): Int {
         if (monitorActive) error("Capture CAN déjà en cours")
@@ -114,36 +116,33 @@ class ObdClient {
         var totalLineCount = 0
 
         try {
-            while (monitorStopRequestedAt == 0L) {
-                o.write(("STM $MONITOR_BATCH_SIZE\r").toByteArray(Charsets.US_ASCII))
-                o.flush()
+            o.write("STM\r".toByteArray(Charsets.US_ASCII))
+            o.flush()
 
-                val line = StringBuilder()
-                var promptSeen = false
+            val line = StringBuilder()
+            var promptSeen = false
 
-                while (!promptSeen) {
+            while (!promptSeen) {
+                if (i.available() > 0) {
+                    val b = i.read()
+                    if (b < 0) break
+
+                    val c = b.toChar()
+                    if (c == '>') {
+                        emitMonitorLine(line, onLine)?.let { totalLineCount += it }
+                        promptSeen = true
+                    } else if (c == '\r' || c == '\n') {
+                        emitMonitorLine(line, onLine)?.let { totalLineCount += it }
+                    } else if (c != '\u0000') {
+                        line.append(c)
+                    }
+                } else {
                     if (monitorStopRequestedAt != 0L &&
                         System.currentTimeMillis() - monitorStopRequestedAt > 3000L
                     ) {
-                        return totalLineCount
+                        break
                     }
-
-                    if (i.available() > 0) {
-                        val b = i.read()
-                        if (b < 0) return totalLineCount
-
-                        val c = b.toChar()
-                        if (c == '>') {
-                            emitMonitorLine(line, onLine)?.let { totalLineCount += it }
-                            promptSeen = true
-                        } else if (c == '\r' || c == '\n') {
-                            emitMonitorLine(line, onLine)?.let { totalLineCount += it }
-                        } else if (c != '\u0000') {
-                            line.append(c)
-                        }
-                    } else {
-                        Thread.sleep(1)
-                    }
+                    Thread.sleep(1)
                 }
             }
         } finally {
@@ -162,7 +161,10 @@ class ObdClient {
         if (value.isBlank()) return null
 
         val upper = value.uppercase()
-        if (upper == "STOPPED") return null
+        if (upper == "STM" || upper == "STOPPED") return null
+        if (upper == "?") {
+            throw IllegalStateException("Commande STM refusée par l'OBDLink")
+        }
         if (upper == "BUFFER FULL") {
             onLine("# OBDLINK BUFFER FULL — relance automatique")
             return null
