@@ -6,15 +6,18 @@ import android.app.Activity
 import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothDevice
 import android.content.ClipData
+import android.content.ContentValues
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
+import android.os.Environment
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
+import android.provider.MediaStore
 import android.view.View
 import android.widget.ArrayAdapter
 import android.widget.Button
@@ -24,14 +27,20 @@ import android.widget.ScrollView
 import android.widget.Spinner
 import android.widget.TextView
 import android.widget.Toast
+import java.io.BufferedOutputStream
+import java.io.File
+import java.io.FileOutputStream
+import java.io.OutputStream
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.concurrent.Executors
+import java.util.zip.ZipEntry
+import java.util.zip.ZipOutputStream
 
 class MainActivity : Activity() {
     companion object {
-        private const val APP_VERSION = "RC390_V003_003"
+        private const val APP_VERSION = "RC390_V003_004"
         private const val CAN_MAX_LINES = 30000
     }
 
@@ -47,7 +56,7 @@ class MainActivity : Activity() {
     private lateinit var scanButton: Button
     private lateinit var dtcButton: Button
     private lateinit var canButton: Button
-    private lateinit var markerButton: Button
+    private lateinit var saveDataButton: Button
     private lateinit var sendButton: Button
     private lateinit var commandInput: EditText
     private lateinit var consolePanel: View
@@ -83,7 +92,7 @@ class MainActivity : Activity() {
         scanButton = findViewById(R.id.scanButton)
         dtcButton = findViewById(R.id.dtcButton)
         canButton = findViewById(R.id.canButton)
-        markerButton = findViewById(R.id.markerButton)
+        saveDataButton = findViewById(R.id.saveDataButton)
         sendButton = findViewById(R.id.sendButton)
         commandInput = findViewById(R.id.commandInput)
         consolePanel = findViewById(R.id.consolePanel)
@@ -106,7 +115,7 @@ class MainActivity : Activity() {
         canButton.setOnClickListener {
             if (canCaptureRunning) stopCanCapture() else startCanCapture()
         }
-        markerButton.setOnClickListener { addCanMarker() }
+        saveDataButton.setOnClickListener { saveDataToDownloads() }
         sendButton.setOnClickListener { sendRawCommand() }
         findViewById<Button>(R.id.copyButton).setOnClickListener { copyReport() }
         findViewById<Button>(R.id.shareButton).setOnClickListener { shareReport() }
@@ -151,10 +160,21 @@ class MainActivity : Activity() {
         grantResults: IntArray
     ) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-        if (requestCode == 100 && grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED) {
-            loadBondedDevices()
-        } else {
-            toast("Permission Bluetooth nécessaire")
+        when (requestCode) {
+            100 -> {
+                if (grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED) {
+                    loadBondedDevices()
+                } else {
+                    toast("Permission Bluetooth nécessaire")
+                }
+            }
+            101 -> {
+                if (grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED) {
+                    saveDataToDownloads()
+                } else {
+                    toast("Permission stockage nécessaire")
+                }
+            }
         }
     }
 
@@ -403,21 +423,6 @@ class MainActivity : Activity() {
         mainHandler.postDelayed({ refreshCaptureState() }, 800)
     }
 
-    private fun addCanMarker() {
-        if (!CanCaptureService.isRunning(this)) {
-            refreshCaptureState()
-            return
-        }
-
-        startService(
-            Intent(this, CanCaptureService::class.java).apply {
-                action = CanCaptureService.ACTION_MARKER
-            }
-        )
-        appendLog("Marqueur CAN envoyé")
-        mainHandler.postDelayed({ refreshCaptureState() }, 150)
-    }
-
     private fun refreshCaptureState() {
         canCaptureRunning = CanCaptureService.isRunning(this)
         val state = CanCaptureService.status(this)
@@ -454,7 +459,7 @@ class MainActivity : Activity() {
         dtcButton.isEnabled = connected && !canCaptureRunning
         sendButton.isEnabled = connected && !canCaptureRunning
         canButton.isEnabled = connected
-        markerButton.isEnabled = connected && canCaptureRunning
+        saveDataButton.isEnabled = !canCaptureRunning && CanCaptureService.reportFile(this) != null
 
         if (!connected) {
             statusText.text = "Déconnecté"
@@ -471,7 +476,7 @@ class MainActivity : Activity() {
         sendButton.isEnabled = connected && !running
         canButton.isEnabled = running || connected
         canButton.text = if (running) "Arrêter CAN" else "Démarrer CAN"
-        markerButton.isEnabled = running
+        saveDataButton.isEnabled = !running && CanCaptureService.reportFile(this) != null
     }
 
     private fun setBusy(busy: Boolean, message: String?) {
@@ -482,7 +487,99 @@ class MainActivity : Activity() {
         dtcButton.isEnabled = !busy && obd.isConnected && !canCaptureRunning
         sendButton.isEnabled = !busy && obd.isConnected && !canCaptureRunning
         canButton.isEnabled = !busy && obd.isConnected
-        markerButton.isEnabled = !busy && obd.isConnected && canCaptureRunning
+        saveDataButton.isEnabled = !busy && !canCaptureRunning && CanCaptureService.reportFile(this) != null
+    }
+
+    private fun saveDataToDownloads() {
+        if (CanCaptureService.isRunning(this)) {
+            toast("Arrête d’abord la capture CAN")
+            return
+        }
+
+        val source = CanCaptureService.reportFile(this)
+        if (source == null || !source.exists()) {
+            toast("Aucune capture CAN à enregistrer")
+            return
+        }
+
+        if (Build.VERSION.SDK_INT <= Build.VERSION_CODES.P &&
+            checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED
+        ) {
+            requestPermissions(arrayOf(Manifest.permission.WRITE_EXTERNAL_STORAGE), 101)
+            return
+        }
+
+        saveDataButton.isEnabled = false
+        statusText.text = "Enregistrement des données…"
+
+        executor.execute {
+            try {
+                val zipName = source.name.removeSuffix(".txt") + ".zip"
+
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    val values = ContentValues().apply {
+                        put(MediaStore.Downloads.DISPLAY_NAME, zipName)
+                        put(MediaStore.Downloads.MIME_TYPE, "application/zip")
+                        put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
+                        put(MediaStore.Downloads.IS_PENDING, 1)
+                    }
+
+                    val uri = contentResolver.insert(
+                        MediaStore.Downloads.EXTERNAL_CONTENT_URI,
+                        values
+                    ) ?: error("Impossible de créer le fichier dans Téléchargements")
+
+                    try {
+                        contentResolver.openOutputStream(uri)?.use { output ->
+                            zipCapture(source, output)
+                        } ?: error("Impossible d’ouvrir le fichier de sortie")
+
+                        values.clear()
+                        values.put(MediaStore.Downloads.IS_PENDING, 0)
+                        contentResolver.update(uri, values, null, null)
+                    } catch (e: Exception) {
+                        contentResolver.delete(uri, null, null)
+                        throw e
+                    }
+                } else {
+                    @Suppress("DEPRECATION")
+                    val downloads = Environment.getExternalStoragePublicDirectory(
+                        Environment.DIRECTORY_DOWNLOADS
+                    )
+                    if (!downloads.exists() && !downloads.mkdirs()) {
+                        error("Impossible d’accéder au dossier Téléchargements")
+                    }
+                    val target = File(downloads, zipName)
+                    FileOutputStream(target, false).use { output ->
+                        zipCapture(source, output)
+                    }
+                }
+
+                mainHandler.post {
+                    appendLog("Données CAN enregistrées : Téléchargements/$zipName")
+                    statusText.text = "Données enregistrées : $zipName"
+                    updateCaptureUi()
+                    toast("Sauvegardé dans Téléchargements")
+                }
+            } catch (e: Exception) {
+                mainHandler.post {
+                    appendLog("ERREUR Save data : " + e.message)
+                    statusText.text = "Échec enregistrement des données"
+                    updateCaptureUi()
+                    toast("Échec Save data")
+                }
+            }
+        }
+    }
+
+    private fun zipCapture(source: File, output: OutputStream) {
+        ZipOutputStream(BufferedOutputStream(output)).use { zip ->
+            zip.putNextEntry(ZipEntry(source.name))
+            source.inputStream().buffered().use { input ->
+                input.copyTo(zip)
+            }
+            zip.closeEntry()
+        }
     }
 
     private fun appendLog(message: String) {
