@@ -261,7 +261,7 @@ class CanCaptureService : Service() {
     private fun buildNotification(text: String) =
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             android.app.Notification.Builder(this, CHANNEL_ID)
-                .setSmallIcon(android.R.drawable.stat_sys_data_bluetooth)
+                .setSmallIcon(android.R.drawable.stat_notify_sync)
                 .setContentTitle("RC390 — capture CAN")
                 .setContentText(text)
                 .setOngoing(true)
@@ -269,7 +269,7 @@ class CanCaptureService : Service() {
         } else {
             @Suppress("DEPRECATION")
             android.app.Notification.Builder(this)
-                .setSmallIcon(android.R.drawable.stat_sys_data_bluetooth)
+                .setSmallIcon(android.R.drawable.stat_notify_sync)
                 .setContentTitle("RC390 — capture CAN")
                 .setContentText(text)
                 .setOngoing(true)
