@@ -17,7 +17,7 @@ object SensorThresholds {
     val base = listOf(
         SensorThreshold(
             key = "coolant",
-            label = "LDR",
+            label = "T°E",
             unit = "°C",
             displayMin = 0.0,
             normalMin = 70.0,
@@ -29,7 +29,7 @@ object SensorThresholds {
         ),
         SensorThreshold(
             key = "voltage",
-            label = "Charge",
+            label = "V",
             unit = "V",
             displayMin = 10.0,
             normalMin = 13.5,
@@ -41,7 +41,7 @@ object SensorThresholds {
         ),
         SensorThreshold(
             key = "rpmIdle",
-            label = "Ralenti",
+            label = "RPM",
             unit = "tr/min",
             displayMin = 1000.0,
             normalMin = 1630.0,
